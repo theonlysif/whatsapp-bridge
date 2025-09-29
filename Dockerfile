@@ -17,7 +17,7 @@ RUN go mod download
 COPY . .
 
 # Build the application with CGO enabled for SQLite
-RUN CGO_ENABLED=1 GOOS=linux go build -a -installsuffix cgo -o main .
+RUN CGO_ENABLED=1 GOOS=linux go build -a -installsuffix cgo -o bridge-app .
 
 # Start a new stage from alpine for runtime
 FROM alpine:latest
@@ -28,7 +28,7 @@ RUN apk --no-cache add ca-certificates sqlite
 WORKDIR /root/
 
 # Copy the pre-built binary file from the previous stage
-COPY --from=builder /app/main .
+COPY --from=builder /app/bridge-app .
 
 # Create store directory for database and media files
 RUN mkdir -p store
@@ -41,4 +41,4 @@ ENV PORT=8080
 ENV GIN_MODE=release
 
 # Command to run the executable
-CMD ["./main"]
+CMD ["./bridge-app"]

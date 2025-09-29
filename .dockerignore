@@ -5,9 +5,14 @@
 # Ignore documentation
 *.md
 README.md
+README-old.md
 
 # Ignore local store directory (will be created in container)
 store/
+
+# Ignore subdirectories to prevent conflicts
+whatsapp-bridge/
+whatsapp-mcp-server/
 
 # Ignore IDE files
 .vscode/
@@ -19,3 +24,7 @@ Thumbs.db
 
 # Ignore logs
 *.log
+
+# Ignore build artifacts
+bridge-app
+whatsapp-bridge-bin
