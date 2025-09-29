@@ -641,7 +641,7 @@ func downloadMedia(client *whatsmeow.Client, messageStore *MessageStore, message
 	}
 
 	// Download the media using whatsmeow client
-	mediaData, err := client.Download(downloader)
+	mediaData, err := client.Download(context.Background(), downloader)
 	if err != nil {
 		return false, "", "", "", fmt.Errorf("failed to download media: %v", err)
 	}
@@ -786,6 +786,100 @@ func startRESTServer(client *whatsmeow.Client, messageStore *MessageStore, port 
 	}()
 }
 
+// Global variables for reconnection state management
+var (
+	reconnecting = false
+	maxReconnectAttempts = 10
+	reconnectDelay = 5 * time.Second
+)
+
+// handleReconnection manages automatic reconnection with exponential backoff
+func handleReconnection(client *whatsmeow.Client, logger waLog.Logger) {
+	// Prevent multiple concurrent reconnection attempts
+	if reconnecting {
+		return
+	}
+	reconnecting = true
+	defer func() { reconnecting = false }()
+
+	logger.Infof("Starting reconnection process...")
+
+	for attempt := 1; attempt <= maxReconnectAttempts; attempt++ {
+		logger.Infof("Reconnection attempt %d/%d", attempt, maxReconnectAttempts)
+
+		// Check if already connected
+		if client.IsConnected() {
+			logger.Infof("Already reconnected successfully")
+			return
+		}
+
+		// Try to reconnect
+		err := client.Connect()
+		if err != nil {
+			logger.Errorf("Reconnection attempt %d/%d failed with error: %v", attempt, maxReconnectAttempts, err)
+
+			// Log additional context about the error
+			if strings.Contains(err.Error(), "websocket") {
+				logger.Warnf("WebSocket connection error detected - this may be a network connectivity issue")
+			} else if strings.Contains(err.Error(), "auth") {
+				logger.Errorf("Authentication error detected - device may need to be re-paired")
+			} else if strings.Contains(err.Error(), "timeout") {
+				logger.Warnf("Connection timeout - network may be slow or unstable")
+			}
+
+			// Calculate exponential backoff delay
+			delay := time.Duration(math.Pow(2, float64(attempt-1))) * reconnectDelay
+			if delay > 5*time.Minute {
+				delay = 5 * time.Minute // Cap at 5 minutes
+			}
+
+			logger.Infof("Waiting %v before attempt %d/%d...", delay, attempt+1, maxReconnectAttempts)
+			time.Sleep(delay)
+			continue
+		}
+
+		// Wait a moment for connection to stabilize
+		time.Sleep(2 * time.Second)
+
+		// Verify connection
+		if client.IsConnected() {
+			logger.Infof("Successfully reconnected to WhatsApp")
+			return
+		}
+
+		logger.Warnf("Connection attempt %d succeeded but connection is not stable", attempt)
+	}
+
+	logger.Errorf("Failed to reconnect after %d attempts. Manual intervention may be required.", maxReconnectAttempts)
+}
+
+// startConnectionMonitoring starts a goroutine to periodically check connection health
+func startConnectionMonitoring(client *whatsmeow.Client, logger waLog.Logger) {
+	go func() {
+		ticker := time.NewTicker(30 * time.Second) // Check every 30 seconds
+		defer ticker.Stop()
+
+		logger.Infof("Starting connection monitoring...")
+
+		for {
+			select {
+			case <-ticker.C:
+				if !client.IsConnected() {
+					logger.Warnf("Connection health check failed: client not connected")
+					// Don't trigger reconnection here if already reconnecting
+					if !reconnecting {
+						logger.Infof("Triggering reconnection due to health check failure")
+						go handleReconnection(client, logger)
+					}
+				} else {
+					// Optionally log periodic health checks (uncomment for debugging)
+					// logger.Infof("Connection health check: OK")
+				}
+			}
+		}
+	}()
+}
+
 func main() {
 	// Set up logger
 	logger := waLog.Stdout("Client", "INFO", true)
@@ -800,14 +894,14 @@ func main() {
 		return
 	}
 
-	container, err := sqlstore.New("sqlite3", "file:store/whatsapp.db?_foreign_keys=on", dbLog)
+	container, err := sqlstore.New(context.Background(), "sqlite3", "file:store/whatsapp.db?_foreign_keys=on", dbLog)
 	if err != nil {
 		logger.Errorf("Failed to connect to database: %v", err)
 		return
 	}
 
 	// Get device store - This contains session information
-	deviceStore, err := container.GetFirstDevice()
+	deviceStore, err := container.GetFirstDevice(context.Background())
 	if err != nil {
 		if err == sql.ErrNoRows {
 			// No device exists, create one
@@ -834,7 +928,7 @@ func main() {
 	}
 	defer messageStore.Close()
 
-	// Setup event handling for messages and history sync
+	// Setup event handling for messages, history sync, and connection issues
 	client.AddEventHandler(func(evt interface{}) {
 		switch v := evt.(type) {
 		case *events.Message:
@@ -850,6 +944,21 @@ func main() {
 
 		case *events.LoggedOut:
 			logger.Warnf("Device logged out, please scan QR code to log in again")
+
+		case *events.Disconnected:
+			logger.Warnf("Disconnected from WhatsApp")
+			logger.Infof("Attempting automatic reconnection...")
+			go handleReconnection(client, logger)
+
+		case *events.StreamError:
+			logger.Errorf("WebSocket stream error occurred")
+			logger.Infof("Stream error detected, attempting reconnection...")
+			go handleReconnection(client, logger)
+
+		case *events.KeepAliveTimeout:
+			logger.Warnf("Keep-alive timeout, connection may be unstable")
+			// Trigger reconnection for keep-alive timeouts
+			go handleReconnection(client, logger)
 		}
 	})
 
@@ -907,6 +1016,9 @@ func main() {
 
 	// Start REST API server
 	startRESTServer(client, messageStore, 8080)
+
+	// Start connection monitoring
+	startConnectionMonitoring(client, logger)
 
 	// Create a channel to keep the main goroutine alive
 	exitChan := make(chan os.Signal, 1)
@@ -988,7 +1100,7 @@ func GetChatName(client *whatsmeow.Client, messageStore *MessageStore, jid types
 		logger.Infof("Getting name for contact: %s", chatJID)
 
 		// Just use contact info (full name)
-		contact, err := client.Store.Contacts.GetContact(jid)
+		contact, err := client.Store.Contacts.GetContact(context.Background(), jid)
 		if err == nil && contact.FullName != "" {
 			name = contact.FullName
 		} else if sender != "" {

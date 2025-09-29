@@ -1,0 +1,21 @@
+# Ignore git files
+.git
+.gitignore
+
+# Ignore documentation
+*.md
+README.md
+
+# Ignore local store directory (will be created in container)
+store/
+
+# Ignore IDE files
+.vscode/
+.idea/
+
+# Ignore OS files
+.DS_Store
+Thumbs.db
+
+# Ignore logs
+*.log
