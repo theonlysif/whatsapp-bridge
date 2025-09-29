@@ -1,11 +1,19 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "whatsapp-mcp-server"
 version = "0.1.0"
-description = "Add your description here"
-readme = "README.md"
+description = "WhatsApp MCP Server - Model Context Protocol server for WhatsApp integration"
 requires-python = ">=3.11"
 dependencies = [
     "httpx>=0.28.1",
     "mcp[cli]>=1.6.0",
     "requests>=2.32.3",
+    "fastapi>=0.104.1",
+    "uvicorn>=0.24.0",
 ]
+
+[tool.setuptools]
+py-modules = ["main", "whatsapp", "audio"]

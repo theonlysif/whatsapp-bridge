@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: whatsapp-mcp-server
+    env: docker
+    dockerfilePath: ./whatsapp-mcp-server/Dockerfile
+    plan: starter
+    region: oregon
+    branch: main
+    healthCheckPath: /health
+    envVars:
+      - key: MCP_PORT
+        value: 3000
+      - key: MCP_HOST
+        value: 0.0.0.0
+      - key: PORT
+        value: 3000
+    # Auto-deploy when you push to main branch
+    autoDeploy: true

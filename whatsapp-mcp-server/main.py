@@ -1,5 +1,10 @@
+import os
+import threading
+import uvicorn
 from typing import List, Dict, Any, Optional
 from mcp.server.fastmcp import FastMCP
+from fastapi import FastAPI
+from fastapi.responses import JSONResponse
 from whatsapp import (
     search_contacts as whatsapp_search_contacts,
     list_messages as whatsapp_list_messages,
@@ -17,6 +22,18 @@ from whatsapp import (
 
 # Initialize FastMCP server
 mcp = FastMCP("whatsapp")
+
+# Create a separate FastAPI app for health checks
+health_app = FastAPI()
+
+@health_app.get("/health")
+async def health_check():
+    """Health check endpoint for deployment platforms."""
+    return JSONResponse({
+        "status": "healthy",
+        "service": "whatsapp-mcp-server",
+        "version": "0.1.0"
+    })
 
 @mcp.tool()
 def search_contacts(query: str) -> List[Dict[str, Any]]:
@@ -247,5 +264,20 @@ def download_media(message_id: str, chat_jid: str) -> Dict[str, Any]:
         }
 
 if __name__ == "__main__":
-    # Initialize and run the server
-    mcp.run(transport='stdio')
+    # Get configuration from environment variables
+    host = os.getenv('MCP_HOST', '0.0.0.0')
+    port = int(os.getenv('MCP_PORT', '3000'))
+    health_port = port + 1  # Health check on port + 1
+    
+    print(f"Starting WhatsApp MCP Server on {host}:{port}")
+    print(f"Health check available on {host}:{health_port}/health")
+    
+    # Start health check server in a separate thread
+    def run_health_server():
+        uvicorn.run(health_app, host=host, port=health_port, log_level="info")
+    
+    health_thread = threading.Thread(target=run_health_server, daemon=True)
+    health_thread.start()
+    
+    # Initialize and run the MCP server with HTTP transport
+    mcp.run(transport='sse', host=host, port=port)
