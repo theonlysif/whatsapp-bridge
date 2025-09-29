@@ -13,6 +13,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -677,6 +678,26 @@ func extractDirectPathFromURL(url string) string {
 
 // Start a REST API server to expose the WhatsApp client functionality
 func startRESTServer(client *whatsmeow.Client, messageStore *MessageStore, port int) {
+	// Health check endpoint
+	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]string{
+			"status": "ok",
+			"message": "WhatsApp Bridge is running",
+			"connected": fmt.Sprintf("%t", client.IsConnected()),
+		})
+	})
+
+	// Health check endpoint
+	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]string{
+			"status": "healthy",
+			"connected": fmt.Sprintf("%t", client.IsConnected()),
+		})
+	})
 	// Handler for sending messages
 	http.HandleFunc("/api/send", func(w http.ResponseWriter, r *http.Request) {
 		// Only allow POST requests
@@ -965,60 +986,67 @@ func main() {
 	// Create channel to track connection success
 	connected := make(chan bool, 1)
 
-	// Connect to WhatsApp
-	if client.Store.ID == nil {
-		// No ID stored, this is a new client, need to pair with phone
-		qrChan, _ := client.GetQRChannel(context.Background())
-		err = client.Connect()
-		if err != nil {
-			logger.Errorf("Failed to connect: %v", err)
-			return
+	// Get port from environment variable, default to 8080
+	port := 8080
+	if portEnv := os.Getenv("PORT"); portEnv != "" {
+		if parsedPort, err := strconv.Atoi(portEnv); err == nil {
+			port = parsedPort
 		}
-
-		// Print QR code for pairing with phone
-		for evt := range qrChan {
-			if evt.Event == "code" {
-				fmt.Println("\nScan this QR code with your WhatsApp app:")
-				qrterminal.GenerateHalfBlock(evt.Code, qrterminal.L, os.Stdout)
-			} else if evt.Event == "success" {
-				connected <- true
-				break
-			}
-		}
-
-		// Wait for connection
-		select {
-		case <-connected:
-			fmt.Println("\nSuccessfully connected and authenticated!")
-		case <-time.After(3 * time.Minute):
-			logger.Errorf("Timeout waiting for QR code scan")
-			return
-		}
-	} else {
-		// Already logged in, just connect
-		err = client.Connect()
-		if err != nil {
-			logger.Errorf("Failed to connect: %v", err)
-			return
-		}
-		connected <- true
 	}
 
-	// Wait a moment for connection to stabilize
-	time.Sleep(2 * time.Second)
-
-	if !client.IsConnected() {
-		logger.Errorf("Failed to establish stable connection")
-		return
-	}
-
-	fmt.Println("\n✓ Connected to WhatsApp! Type 'help' for commands.")
-
-	// Start REST API server
-	startRESTServer(client, messageStore, 8080)
+	// Start REST API server first (for health checks)
+	startRESTServer(client, messageStore, port)
 
 	// Start connection monitoring
 	startConnectionMonitoring(client, logger)
+
+	// Connect to WhatsApp in background
+	go func() {
+		if client.Store.ID == nil {
+			// No ID stored, this is a new client, need to pair with phone
+			logger.Infof("No existing session found. QR code will be needed for authentication.")
+			qrChan, _ := client.GetQRChannel(context.Background())
+			err = client.Connect()
+			if err != nil {
+				logger.Errorf("Failed to connect: %v", err)
+				return
+			}
+
+			// Print QR code for pairing with phone
+			for evt := range qrChan {
+				if evt.Event == "code" {
+					logger.Infof("QR Code generated. Please scan with your WhatsApp app.")
+					fmt.Println("\nScan this QR code with your WhatsApp app:")
+					qrterminal.GenerateHalfBlock(evt.Code, qrterminal.L, os.Stdout)
+				} else if evt.Event == "success" {
+					logger.Infof("Successfully authenticated with WhatsApp!")
+					connected <- true
+					break
+				}
+			}
+		} else {
+			// Already logged in, just connect
+			logger.Infof("Existing session found. Connecting...")
+			err = client.Connect()
+			if err != nil {
+				logger.Errorf("Failed to connect: %v", err)
+				return
+			}
+			logger.Infof("Connected to WhatsApp using existing session")
+			connected <- true
+		}
+	}()
+
+	logger.Infof("WhatsApp Bridge started successfully on port %d", port)
+	fmt.Printf("\n🚀 WhatsApp Bridge is running on port %d\n", port)
+	fmt.Printf("📋 Health check: http://localhost:%d/health\n", port)
+	fmt.Printf("📱 API endpoint: http://localhost:%d/api/send\n", port)
+
+	if client.Store.ID == nil {
+		fmt.Println("\n⚠️  Authentication required: Please check the logs for QR code and scan it with your WhatsApp app.")
+	} else {
+		fmt.Println("\n✅ Using existing WhatsApp session.")
+	}
 
 	// Create a channel to keep the main goroutine alive
 	exitChan := make(chan os.Signal, 1)

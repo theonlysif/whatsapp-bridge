@@ -1,6 +1,8 @@
-module whatsapp-client
+module github.com/theonlysif/whatsapp-bridge
 
-go 1.24.1
+go 1.24.0
+
+toolchain go1.24.1
 
 require (
 	github.com/mattn/go-sqlite3 v1.14.32

@@ -1,5 +1,5 @@
-# Use Go 1.24 alpine image for smaller size
-FROM golang:1.24-alpine AS builder
+# Use Go 1.23 alpine image for better compatibility
+FROM golang:1.23-alpine AS builder
 
 # Install required packages for CGO (needed for SQLite)
 RUN apk add --no-cache gcc musl-dev sqlite-dev
